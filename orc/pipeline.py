@@ -1,4 +1,5 @@
 import itertools
+import random
 from contextlib import contextmanager
 from multiprocessing import Manager, Process
 from time import sleep
@@ -9,6 +10,7 @@ from toolz import take
 class Context:
     def __init__(self):
         self.manager = Manager()
+        self.lock = self.manager.Lock()
         self.data = self.manager.dict({})
         self.output_queue = self.manager.Queue()
 
@@ -17,17 +19,16 @@ class Context:
 
     @contextmanager
     def get_state(self, context_key):
-        with self.manager.Lock():
-            def get_val():
-                return self.data[context_key]
+        with self.lock:
+            aggregate = self.data[context_key]
 
             def set_val(set_fn):
-                updated_val = set_fn(self.data[context_key])
+                updated_val = set_fn(aggregate)
                 self.data[context_key] = updated_val
                 return updated_val
 
             try:
-                yield get_val, set_val
+                yield aggregate, set_val
             finally:
                 pass
 
@@ -58,8 +59,10 @@ class Pipeline:
             if op_type == 'map':
                 result = op_func(result)
             if op_type == 'reduce':
-                with self.context.get_state(op_name) as state:
-                    result = op_func(result, state)
+                with self.context.get_state(op_name) as (aggregate, set_val):
+                    result, setter = op_func(result, aggregate)
+                    if setter:
+                        set_val(setter)
 
             if result is None:
                 return None
@@ -95,19 +98,18 @@ class Pipeline:
 
 
 def double(x):
+    sleep(random.uniform(0, 0.1))
     return x * 2
 
 
-def only_one_for_tenths(x, state):
-    get_val, set_val = state
-    sleep(0.1)
+def only_one_for_tenths(x, aggregate):
+    sleep(random.uniform(0, 0.1))
 
     tenth = x // 10
-    if tenth in get_val():
-        return None
+    if tenth in aggregate:
+        return None, None
     else:
-        set_val(lambda prev: prev.union({tenth}))
-        return x
+        return x, lambda prev: prev.union({tenth})
 
 
 def main():

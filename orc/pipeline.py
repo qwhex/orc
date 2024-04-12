@@ -1,47 +1,13 @@
 import inspect
 import logging
-from contextlib import contextmanager
-from multiprocessing import Manager, Process
+from multiprocessing import Process
+from typing import Any, Generator, Tuple, Callable
 
-# FIXME: remove dep
+from orc.context import Context
+from orc.util import batch_generator
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-class Context:
-    def __init__(self):
-        self.manager = Manager()
-        self.locks = {}
-        self.data = self.manager.dict({})
-        self.output_queue = self.manager.Queue()
-
-    def add_context_key(self, context_key, initializer):
-        if context_key in self.data:
-            raise KeyError(f"Context key '{context_key}' already exists")
-
-        self.data[context_key] = initializer
-        self.locks[context_key] = self.manager.Lock()
-
-    # @contextmanager
-    # # def get_state(self, context_key):
-    # #     with self.locks[context_key]:
-    # #         yield self.data[context_key], lambda fn: self.data.__setitem__(context_key, fn(self.data[context_key]))
-
-    @contextmanager
-    def get_state(self, context_key):
-        with self.locks[context_key]:
-            aggregate = self.data[context_key]
-
-            def set_val(set_fn):
-                updated_val = set_fn(aggregate)
-                self.data[context_key] = updated_val
-                return updated_val
-
-            yield aggregate, set_val
-
-    def yield_result(self, value):
-        self.output_queue.put(value)
 
 
 class Pipeline:
@@ -50,7 +16,11 @@ class Pipeline:
         self.context = Context()
         self.ran = False
 
-    def map(self, name, func):
+    def map(self,
+            name: str,
+            func: Callable[[Any], Any]
+            ) -> 'Pipeline':
+
         self._validate_signature(func, 1)
         self._validate_unique_name(name)
         self._validate_not_ran()
@@ -58,7 +28,12 @@ class Pipeline:
         self.operations.append(('map', name, func))
         return self
 
-    def reduce(self, name, func, initializer):
+    def reduce(self,
+               name: str,
+               func: Callable[[Any, Any], Tuple[Any, Callable[[Any], Any]]],
+               initializer: Any
+               ) -> 'Pipeline':
+
         self._validate_signature(func, 2)
         self._validate_unique_name(name)
         self._validate_not_ran()
@@ -67,7 +42,7 @@ class Pipeline:
         self.context.add_context_key(name, initializer)
         return self
 
-    def run_for_item(self, item):
+    def run_for_item(self, item: Any) -> None:
         result = item
         for op in self.operations:
             op_type, op_name, op_func = op[0], op[1], op[2]
@@ -90,7 +65,11 @@ class Pipeline:
 
         self.context.yield_result(result)
 
-    def run(self, input_stream, num_processes):
+    def run(self,
+            input_stream: Generator[Any, None, None],
+            num_processes: int
+            ) -> Generator[Any, None, None]:
+
         self._validate_not_ran()
         if num_processes < 1:
             raise ValueError("Number of processes must be at least 1")
@@ -100,7 +79,7 @@ class Pipeline:
         self.ran = True
         processes = []
         try:
-            for batch in _batch_generator(input_stream, num_processes):
+            for batch in batch_generator(input_stream, num_processes):
                 processes.clear()
 
                 for item in batch:
@@ -143,26 +122,20 @@ class Pipeline:
 
         if len(parameters) != expected_params_count:
             raise ValueError(
-                f"Function {func.__name__} expects {expected_params_count} parameters, got {len(parameters)}")
+                    f"Function {func.__name__} expects {expected_params_count} parameters, got {len(parameters)}")
 
-        if self.operations:
-            prev_func = self.operations[-1][2]
-            prev_output = inspect.signature(prev_func).return_annotation
+        # Check args
+        if not self.operations:
+            return
 
-            current_input = parameters[0].annotation if parameters else None
-            if current_input is not inspect.Signature.empty and prev_output is not inspect.Signature.empty:
-                if not issubclass(prev_output, current_input):
-                    raise ValueError(
-                            f"Type mismatch: {prev_func.__name__} returns {prev_output} but {func.__name__} expects {current_input}")
+        prev_func = self.operations[-1][2]
+        prev_output = inspect.signature(prev_func).return_annotation
 
+        current_input = parameters[0].annotation if parameters else None
+        if current_input is inspect.Signature.empty or prev_output is inspect.Signature.empty:
+            return
 
-def _batch_generator(input_stream, batch_count):
-    """Yields batches of the specified size from the input stream."""
-    batch = []
-    for item in input_stream:
-        batch.append(item)
-        if len(batch) == batch_count:
-            yield batch
-            batch = []
-    if batch:  # Yield any remaining items as the last batch
-        yield batch
+        if not issubclass(prev_output, current_input):
+            raise ValueError(
+                    f"Type mismatch: {prev_func.__name__} returns {prev_output} but {func.__name__} expects {current_input}"
+            )

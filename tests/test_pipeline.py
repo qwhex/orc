@@ -1,6 +1,8 @@
+import itertools
 import random
+import time
+from itertools import islice
 from time import sleep
-from typing import Callable
 
 import pytest
 
@@ -82,20 +84,35 @@ def test_concurrency_management(basic_pipeline):
 # Invalid calls
 #
 
-# List of assertions:
+# List of test cases:
 """
-Test invalid number of processes: Checks that the pipeline raises a ValueError when attempting to run with zero processes.
-Test empty input stream: Verifies that the pipeline handles an empty input stream correctly, ensuring it returns an empty result list.
-Test pipeline without operations: Ensures a ValueError is raised when attempting to run a pipeline without any operations added.
-Test running the pipeline multiple times: Checks that a ValueError is raised if the pipeline is run more than once, to prevent re-use without reinitialization.
-Test duplicate operation names: Tests that adding multiple operations with the same name raises a ValueError to prevent operation name conflicts.
-Test adding operations after pipeline run: Verifies that a ValueError is raised if attempting to add new operations after the pipeline has already been run.
-Test map function with incorrect signature: Ensures a ValueError is raised if a map function with the wrong number of parameters is added.
-Test reduce function with incorrect signature: Checks that a ValueError is raised if a reduce function with the wrong number of parameters is added.
-Test map function not callable: Verifies that adding a non-callable object as a map function raises a ValueError.
-Test reduce function not callable: Confirms that adding a non-callable object as a reduce function raises a ValueError.
-Test map function throwing an error: Ensures the pipeline can handle and log errors thrown by map functions, and it verifies the type of result when an error occurs.
-Test reduce function throwing an error: Tests the pipeline's ability to handle and log errors thrown by reduce functions, checking the type of result when an error is thrown.
+Test Cases for the Pipeline's .run() Method:
+Test Invalid Number of Processes: Ensures the pipeline raises a ValueError if attempted to run with zero processes, validating the requirement for at least one process.
+Test Empty Input Stream: Confirms that the pipeline handles an empty input stream gracefully by returning an empty list of results.
+Test Pipeline Without Operations: Checks that attempting to run a pipeline without any operations defined raises a ValueError.
+Test Running the Pipeline Multiple Times: Verifies that the pipeline raises a ValueError if there is an attempt to run it more than once, ensuring that pipelines are not reused without reinitialization.
+Test More Processes Than Items: Ensures that the pipeline can handle cases where the number of processes exceeds the number of items, and that it processes the input correctly.
+Test Cases for Building and Configuring the Pipeline:
+Test Duplicate Operation Names: Ensures that adding operations with duplicate names is not allowed and raises a ValueError.
+Test Adding Operations After Pipeline Run: Verifies that operations cannot be added after the pipeline has started running, raising a ValueError if this rule is violated.
+Test Cases for Validating Map and Reduce Functions:
+Test Invalid Map Function: Checks that attempting to add a non-callable object as a map function raises a ValueError.
+Test Invalid Reduce Function: Ensures that a non-callable object cannot be added as a reduce function, expecting a ValueError.
+Test Incorrect Parameter Count in Map Function: Validates that adding a map function with the wrong number of parameters raises a ValueError.
+Test Incorrect Parameter Count in Reduce Function: Tests that a reduce function with an incorrect number of parameters raises a ValueError.
+Test Incompatible Parameters in Reduce Function: Confirms that a ValueError is raised when the initializer's type does not match the expected type of the reduce function's aggregation argument.
+Test Cases for Ensuring Logical Compatibility Between Operations:
+Test Map Function Parameter Type Order: Checks that consecutive map functions have compatible parameter and return types, raising a ValueError for type mismatches.
+Test Reduce Function Parameter Type Order: Ensures that the output type of a map function matches the expected input type of a subsequent reduce function, raising a ValueError for any type inconsistency.
+Test Cases for Error Handling Within Operations:
+Test Map Function Error Handling: Ensures that the pipeline can handle and appropriately log errors thrown by map functions. It checks the types of results to verify error handling.
+Test Reduce Function Error Handling: Tests the pipeline's ability to manage and log errors occurring in reduce functions, verifying the types of results to ensure errors are handled correctly.
+Performance Testing:
+Test Scalability: Measures the execution times for single-threaded versus multi-threaded runs to ensure that increasing the number of processes decreases the execution time, thereby confirming the pipeline's scalability.
+Miscellaneous and Skipped Tests:
+Test Concurrency Safety (Skipped): Proposed to test the pipeline's thread safety using a property-based testing framework like Hypothesis, but currently skipped.
+Tests with Pending Implementation or Clarification:
+Test State Consistency (Skipped): A skipped test meant to verify the pipeline's handling of duplicate values using a built-in "unique" reducer. This is marked for future implementation and a fix.
 """
 
 
@@ -143,6 +160,20 @@ def test_more_processes_than_items():
     res = list(pipeline.run(input_stream, num_processes=num_proc))
 
     assert set(res) == {0, 2, 4, 6}
+
+
+def test_pipeline_with_infinite_iterator():
+    num_items = 100
+
+    pipeline = Pipeline()
+    pipeline.map('double', lambda x: x * 2)
+
+    infinite_input_stream = itertools.count()
+
+    pipeline_gen = pipeline.run(infinite_input_stream, 4)
+    results = list(islice(pipeline_gen, num_items))
+
+    assert len(results) == num_items, "The number of results should be exactly 100."
 
 
 #
@@ -294,14 +325,31 @@ def test_scalability():
 
     pipeline = Pipeline()
     pipeline.map('scale', lambda x: x * 2)
+
+    # Measure execution time for single-threaded run
+    start_time_single = time.time()
     results_single = list(pipeline.run(input_stream, 1))
+    end_time_single = time.time()
+    time_single = end_time_single - start_time_single
 
     pipeline2 = Pipeline()
     pipeline2.map('scale', lambda x: x * 2)
-    results_multi = list(pipeline2.run(input_stream, 4))
 
-    # FIXME: (just an example, but we want something like this
-    # assert time(results_multi) < time(results_single)
+    # Measure execution time for multi-threaded run
+    start_time_multi = time.time()
+    results_multi = list(pipeline2.run(input_stream, 4))
+    end_time_multi = time.time()
+    time_multi = end_time_multi - start_time_multi
+
+    # Verify results are the same
+    assert set(results_single) == set(results_multi), "Multi-threaded results do not match single-threaded results."
+
+    # Check if multi-threaded execution is faster
+    assert time_multi < time_single, f"Multi-threaded run ({time_multi}s) should be faster than single-threaded run ({time_single}s)."
+
+    # Optionally, log or print the time difference for a clearer comparison
+    print(f"Single-threaded execution time: {time_single} seconds")
+    print(f"Multi-threaded execution time: {time_multi} seconds")
 
 
 #
@@ -316,7 +364,7 @@ def test_concurrency_safety():
     pipeline.reduce('accumulate', lambda x, y: (x + y, lambda agg: agg + x), 0)
     input_stream = iter(range(10))
     results = list(pipeline.run(input_stream, 5))
-    assert sum(results) == sum(range(10))  # Sum might not match due to race conditions if not handled properly
+    assert sum(results) == sum(range(10))
 
 
 #

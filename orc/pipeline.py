@@ -10,16 +10,17 @@ from toolz import take
 class Context:
     def __init__(self):
         self.manager = Manager()
-        self.lock = self.manager.Lock()
+        self.locks = {}
         self.data = self.manager.dict({})
         self.output_queue = self.manager.Queue()
 
     def add_context_key(self, context_key, initializer):
         self.data[context_key] = initializer
+        self.locks[context_key] = self.manager.Lock()
 
     @contextmanager
     def get_state(self, context_key):
-        with self.lock:
+        with self.locks[context_key]:
             aggregate = self.data[context_key]
 
             def set_val(set_fn):
@@ -57,8 +58,10 @@ class Pipeline:
             op_type, op_name, op_func = op[0], op[1], op[2]
 
             if op_type == 'map':
+                # print(op_name, result)
                 result = op_func(result)
             if op_type == 'reduce':
+                # print(op_name, result)
                 with self.context.get_state(op_name) as (aggregate, set_val):
                     result, setter = op_func(result, aggregate)
                     if setter:
@@ -99,7 +102,12 @@ class Pipeline:
 
 def double(x):
     sleep(random.uniform(0, 0.1))
-    return x * 2
+    return x  # * 2
+
+
+def tenth(x):
+    sleep(random.uniform(0, 0.1))
+    return x // 10
 
 
 def only_one_for_tenths(x, aggregate):
@@ -117,9 +125,10 @@ def main():
                 .map(name='double', func=double)
                 .reduce(name='only_one_for_tenths',
                         func=only_one_for_tenths,
-                        initializer=set()))
+                        initializer=set())
+                .map(name='tenth', func=tenth))
 
-    for item in pipeline.run(input_stream=itertools.count(), num_processes=4):
+    for item in pipeline.run(input_stream=itertools.count(), num_processes=12):
         print(item)
 
 

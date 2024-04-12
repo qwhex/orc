@@ -105,6 +105,8 @@ class Pipeline(Generic[Item]):
                             set_val(setter)
             except Exception as e:
                 logger.error(f"Error in {op_type} operation '{op_name}': {e}", exc_info=True)
+                # TODO: Consider logging the stack trace or re-raising the exception with additional context instead of
+                #  converting all errors to ValueError.
                 result = ValueError(f'[{op_type}] {op_name} - {str(e)}')
                 break
 

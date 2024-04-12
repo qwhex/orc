@@ -1,0 +1,5 @@
+.python-version
+.coverage
+htmlcov
+__pycache__
+.idea

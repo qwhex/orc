@@ -1,6 +1,7 @@
-from typing import Generator, List, TypeVar, Iterable
+from typing import Generator, List, TypeVar, Iterable, Callable
 
 Item = TypeVar('Item')
+T = TypeVar('T')
 
 
 def batch_generator(input_stream: Iterable[Item], batch_count: int) -> Generator[List[Item], None, None]:

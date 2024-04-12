@@ -1,7 +1,7 @@
 import inspect
 import logging
 from multiprocessing import Process
-from typing import Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable
+from typing import Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable, Union, get_type_hints
 
 from orc.context import Context
 from orc.util import batch_generator
@@ -16,65 +16,38 @@ Stream = Iterable[Item]
 MapFunction = Callable[[Any], Any]
 
 # Note: based on this, you can't change a value type through a reducer. Good idea?
-ReduceItem = TypeVar('ReduceItem')
 Agg = TypeVar('Agg')
-ReducerFunction = Callable[[ReduceItem, Agg], Tuple[Optional[ReduceItem], Optional[Callable[[Agg], Agg]]]]
+# ReducerReturn = Tuple[Optional[Any], Optional[Callable[[Agg], Agg]]]
+ReducerReturn = Optional[Tuple[Any, Callable[[Agg], Agg]]]
+ReducerFunction = Callable[[Any, Agg], ReducerReturn[Agg]]
 
 
 class Pipeline(Generic[Item]):
     def __init__(self):
         self.operations = []
         self.context = Context()
-        self.ran = False
-
-    def map(self,
-            name: str,
-            func: MapFunction,
-            ) -> 'Pipeline':
-
-        self._validate_signature(func, 1)
-        self._validate_unique_name(name)
-        self._validate_not_ran()
-
-        self.operations.append(('map', name, func))
-        return self
-
-    def reduce(self,
-               name: str,
-               func: ReducerFunction[ReduceItem, Agg],
-               initializer: Agg
-               ) -> 'Pipeline':
-
-        self._validate_signature(func, 2)
-        self._validate_agg_type(func, initializer)
-        self._validate_unique_name(name)
-        self._validate_not_ran()
-
-        self.operations.append(('reduce', name, func,))
-        self.context.add_context_key(name, initializer)
-        return self
 
     def run(self,
             input_stream: Stream,
             num_processes: int
             ) -> Stream:
 
-        self._validate_not_ran()
         if num_processes < 1:
             raise ValueError("Number of processes must be at least 1")
         if not self.operations:
             raise ValueError("No operations have been added to the pipeline")
 
-        self.ran = True
+        self.context.init_data()
         processes = []
         try:
+            # input_stream can be infinite, so we start tasks in batches
             for batch in batch_generator(input_stream, num_processes):
                 processes.clear()
 
                 for item in batch:
                     process = Process(target=self._run_for_item, args=(item,))
-                    processes.append(process)
                     process.start()
+                    processes.append(process)
 
                 for process in processes:
                     process.join()
@@ -84,11 +57,39 @@ class Pipeline(Generic[Item]):
                     yield output_queue.get()
 
         finally:
-            # Ensure all remaining processes are properly terminated
             for process in processes:
                 if process.is_alive():
                     process.terminate()
                 process.join()
+
+    def map(self,
+            func: MapFunction,
+            name: Optional[str] = None
+            ) -> 'Pipeline':
+
+        self._validate_signature(func, 1)
+
+        name = self._find_name('map', func, name)
+        self._validate_unique_name(name)
+
+        self.operations.append(('map', name, func))
+        return self
+
+    def reduce(self,
+               func: ReducerFunction[Agg],
+               initializer: Callable[[], Agg],
+               name: Optional[str] = None
+               ) -> 'Pipeline':
+
+        self._validate_signature(func, 2)
+        _validate_agg_type(func, initializer)
+
+        name = self._find_name('reduce', func, name)
+        self._validate_unique_name(name)
+
+        self.operations.append(('reduce', name, func,))
+        self.context.add_context_key(name, initializer)
+        return self
 
     def _run_for_item(self, item: Item) -> None:
         result = item
@@ -115,9 +116,20 @@ class Pipeline(Generic[Item]):
 
         self.context.yield_result(result)
 
-    def _validate_not_ran(self):
-        if self.ran:
-            raise ValueError('Pipeline has already ran')
+    def _find_name(self, op_type, func: Union[MapFunction, ReducerFunction], name: Optional[str]) -> str:
+        if op_type not in ['map', 'reduce']:
+            raise ValueError(f"op_type for {name} isn't map or reduce: {op_type}")
+
+        if not name:
+            name = f"{op_type}_{func.__name__}"
+
+        original_name = name
+        suffix = 1
+        while any(op_name == name for _, op_name, _ in self.operations):
+            name = f"{original_name}__{str(suffix).zfill(2)}"
+            suffix += 1
+
+        return name
 
     def _validate_unique_name(self, name):
         if any(name == op_name for _, op_name, _ in self.operations):
@@ -132,42 +144,95 @@ class Pipeline(Generic[Item]):
             raise ValueError(f"Expected a callable function, got {type(func).__name__}")
 
         sig = inspect.signature(func)
-        parameters = list(sig.parameters.values())
+        func_parameters = list(sig.parameters.values())
 
-        if len(parameters) != expected_params_count:
+        if len(func_parameters) != expected_params_count:
             raise ValueError(
-                    f"Function {func.__name__} expects {expected_params_count} parameters, got {len(parameters)}")
+                    f"Param count: {func.__name__} expects {expected_params_count} parameters, got {len(func_parameters)}")
 
-        # Check args
-        if not self.operations:
-            return
+        # Check io order
+        if self.operations:
+            func_param_type = func_parameters[0].annotation
 
-        prev_func = self.operations[-1][2]
-        prev_output = inspect.signature(prev_func).return_annotation
+            previous_operation = self.operations[-1]
+            prev_func = previous_operation[2]
+            prev_func_return = _get_return_type(prev_func)
 
-        current_input = parameters[0].annotation if parameters else None
-        if current_input is inspect.Signature.empty or prev_output is inspect.Signature.empty:
-            return
+            if not inspect.isclass(func_param_type):
+                raise ValueError(f'current_param_type not class: '
+                                 f'{func.__name__}() agg: {func_param_type}, ')
 
-        if not issubclass(prev_output, current_input):
-            raise ValueError(f"Type mismatch: {prev_func.__name__} returns {prev_output} "
-                             f"but {func.__name__} expects {current_input}")
+            if not inspect.isclass(prev_func_return):
+                raise ValueError(f'prev_func_return not class: '
+                                 f"prev fn {prev_func.__name__}() returns {prev_func_return} {type(prev_func_return)}")
 
-    def _validate_agg_type(self, func, initializer):
-        expected_agg_type = self._get_aggregate_type(func)
-        if not isinstance(initializer, expected_agg_type):
-            raise ValueError(
-                    f"Initializer type {type(initializer)} does not match expected aggregate type {expected_agg_type}")
+            if func_param_type is inspect.Signature.empty or prev_func_return is inspect.Signature.empty:
+                # FIXME?
+                return
 
-    def _get_aggregate_type(self, func: ReducerFunction) -> type:
-        """
-        Extract the expected aggregate type from the reducer function's second parameter.
-        We use positional access to handle cases where the function parameters might not be named.
-        If no specific type is annotated, 'object' is used as a default to allow any type.
-        """
-        sig = inspect.signature(func)
-        params = list(sig.parameters.values())
-        if len(params) < 2:
-            raise ValueError("Reducer function must take at least two arguments")
-        aggregate_param = params[1]
-        return aggregate_param.annotation if aggregate_param.annotation is not inspect.Signature.empty else object
+            if not issubclass(prev_func_return, func_param_type):
+                raise ValueError(f"Type incompatibility between steps: "
+                                 f"New fn {func.__name__}() expects {func_param_type}, "
+                                 f"prev fn {prev_func.__name__}() returns {prev_func_return} ")
+
+
+def _validate_agg_type(func: ReducerFunction[Agg], initializer: Callable[[], Agg]):
+    """
+    Validates that the type of the initializer's output matches the expected aggregate type.
+    """
+    func_agg_type = _get_aggregate_type(func)
+    init_return_type = _get_return_type(initializer)
+
+    if not inspect.isclass(func_agg_type):
+        raise ValueError(f'func agg type not class: '
+                         f'{func.__name__}() agg: {func_agg_type}, ')
+    if not inspect.isclass(init_return_type):
+        raise ValueError(f'init_return_type not class: '
+                         f'{initializer.__name__}() -> {init_return_type}')
+
+    if not issubclass(init_return_type, func_agg_type):
+        raise ValueError(
+                f"Initializer return type mismatch: "
+                f"{func.__name__}() agg type: {func_agg_type}, "
+                f"{initializer.__name__}() : {init_return_type}")
+
+
+def _get_aggregate_type(func: ReducerFunction) -> type:
+    """
+    Extract the expected aggregate type from the reducer function's second parameter.
+    We use positional access to handle cases where the function parameters might not be named.
+    If no specific type is annotated, 'object' is used as a default to allow any type.
+    """
+    params = list(inspect.signature(func).parameters.values())
+    if len(params) != 2:
+        raise ValueError("Reducer function must take two arguments")
+
+    aggregate_param = params[1]
+    return aggregate_param.annotation if aggregate_param.annotation is not inspect.Signature.empty else object
+
+
+def _get_return_type(callable_obj: Callable) -> type:
+    """
+    Safely extracts the return type from a callable object, returning 'Any' if the type cannot be determined.
+    Includes error handling and logging for robustness.
+    """
+
+    if not callable(callable_obj):
+        raise ValueError(f'Not callable')
+
+    return_type = get_type_hints(callable_obj).get('return')
+    # if return_type is not inspect.Signature.empty and isinstance(return_type, type):
+    return return_type
+
+    # return object
+
+    # FIXME:
+    # raise ValueError(f'Invalid return type: {return_type} (type: {type(return_type)})')
+
+    #
+    # except TypeError as e:
+    #     logger.error(f"Error obtaining type hints: {e}")
+    #     return Any
+    # except Exception as e:
+    #     logger.error(f"Unexpected error: {e}")
+    #     return Any

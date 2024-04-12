@@ -1,7 +1,7 @@
 import inspect
 import logging
 from multiprocessing import Process
-from typing import Any, Generator, Tuple, Callable
+from typing import Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable
 
 from orc.context import Context
 from orc.util import batch_generator
@@ -9,8 +9,19 @@ from orc.util import batch_generator
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# Types:
+Item = TypeVar('Item')
 
-class Pipeline:
+Stream = Iterable[Item]
+MapFunction = Callable[[Any], Any]
+
+# Note: based on this, you can't change a value type through a reducer. Good idea?
+ReduceItem = TypeVar('ReduceItem')
+Agg = TypeVar('Agg')
+ReducerFunction = Callable[[ReduceItem, Agg], Tuple[Optional[ReduceItem], Optional[Callable[[Agg], Agg]]]]
+
+
+class Pipeline(Generic[Item]):
     def __init__(self):
         self.operations = []
         self.context = Context()
@@ -18,7 +29,7 @@ class Pipeline:
 
     def map(self,
             name: str,
-            func: Callable[[Any], Any]
+            func: MapFunction,
             ) -> 'Pipeline':
 
         self._validate_signature(func, 1)
@@ -30,11 +41,12 @@ class Pipeline:
 
     def reduce(self,
                name: str,
-               func: Callable[[Any, Any], Tuple[Any, Callable[[Any], Any]]],
-               initializer: Any
+               func: ReducerFunction[ReduceItem, Agg],
+               initializer: Agg
                ) -> 'Pipeline':
 
         self._validate_signature(func, 2)
+        self._validate_agg_type(func, initializer)
         self._validate_unique_name(name)
         self._validate_not_ran()
 
@@ -42,7 +54,43 @@ class Pipeline:
         self.context.add_context_key(name, initializer)
         return self
 
-    def run_for_item(self, item: Any) -> None:
+    def run(self,
+            input_stream: Stream,
+            num_processes: int
+            ) -> Stream:
+
+        self._validate_not_ran()
+        if num_processes < 1:
+            raise ValueError("Number of processes must be at least 1")
+        if not self.operations:
+            raise ValueError("No operations have been added to the pipeline")
+
+        self.ran = True
+        processes = []
+        try:
+            for batch in batch_generator(input_stream, num_processes):
+                processes.clear()
+
+                for item in batch:
+                    process = Process(target=self._run_for_item, args=(item,))
+                    processes.append(process)
+                    process.start()
+
+                for process in processes:
+                    process.join()
+
+                output_queue = self.context.output_queue
+                while not output_queue.empty():
+                    yield output_queue.get()
+
+        finally:
+            # Ensure all remaining processes are properly terminated
+            for process in processes:
+                if process.is_alive():
+                    process.terminate()
+                process.join()
+
+    def _run_for_item(self, item: Item) -> None:
         result = item
         for op in self.operations:
             op_type, op_name, op_func = op[0], op[1], op[2]
@@ -64,42 +112,6 @@ class Pipeline:
                 return
 
         self.context.yield_result(result)
-
-    def run(self,
-            input_stream: Generator[Any, None, None],
-            num_processes: int
-            ) -> Generator[Any, None, None]:
-
-        self._validate_not_ran()
-        if num_processes < 1:
-            raise ValueError("Number of processes must be at least 1")
-        if not self.operations:
-            raise ValueError("No operations have been added to the pipeline")
-
-        self.ran = True
-        processes = []
-        try:
-            for batch in batch_generator(input_stream, num_processes):
-                processes.clear()
-
-                for item in batch:
-                    process = Process(target=self.run_for_item, args=(item,))
-                    processes.append(process)
-                    process.start()
-
-                for process in processes:
-                    process.join()
-
-                output_queue = self.context.output_queue
-                while not output_queue.empty():
-                    yield output_queue.get()
-
-        finally:
-            # Ensure all remaining processes are properly terminated
-            for process in processes:
-                if process.is_alive():
-                    process.terminate()
-                process.join()
 
     def _validate_not_ran(self):
         if self.ran:
@@ -136,6 +148,24 @@ class Pipeline:
             return
 
         if not issubclass(prev_output, current_input):
+            raise ValueError(f"Type mismatch: {prev_func.__name__} returns {prev_output} "
+                             f"but {func.__name__} expects {current_input}")
+
+    def _validate_agg_type(self, func, initializer):
+        expected_agg_type = self._get_aggregate_type(func)
+        if not isinstance(initializer, expected_agg_type):
             raise ValueError(
-                    f"Type mismatch: {prev_func.__name__} returns {prev_output} but {func.__name__} expects {current_input}"
-            )
+                    f"Initializer type {type(initializer)} does not match expected aggregate type {expected_agg_type}")
+
+    def _get_aggregate_type(self, func: ReducerFunction) -> type:
+        """
+        Extract the expected aggregate type from the reducer function's second parameter.
+        We use positional access to handle cases where the function parameters might not be named.
+        If no specific type is annotated, 'object' is used as a default to allow any type.
+        """
+        sig = inspect.signature(func)
+        params = list(sig.parameters.values())
+        if len(params) < 2:
+            raise ValueError("Reducer function must take at least two arguments")
+        aggregate_param = params[1]
+        return aggregate_param.annotation if aggregate_param.annotation is not inspect.Signature.empty else object

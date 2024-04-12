@@ -1,7 +1,9 @@
-from typing import Generator, List, Any
+from typing import Generator, List, TypeVar, Iterable
+
+Item = TypeVar('Item')
 
 
-def batch_generator(input_stream: Generator[Any, None, None], batch_count: int) -> Generator[List[Any], None, None]:
+def batch_generator(input_stream: Iterable[Item], batch_count: int) -> Generator[List[Item], None, None]:
     """Yields batches of the specified size from the input stream."""
     batch = []
     for item in input_stream:

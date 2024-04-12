@@ -9,17 +9,21 @@ import pytest
 from orc.pipeline import Context, Pipeline
 
 
-def double(x):
+#
+# Test helpers
+#
+
+def slow_double(x):
     sleep(random.uniform(0, 0.1))
     return x * 2
 
 
-def tenth(x):
+def slow_tenth(x):
     sleep(random.uniform(0, 0.1))
     return x // 10
 
 
-def only_one_for_tenths(x, aggregate):
+def slow_only_one_for_tenths(x, aggregate):
     sleep(random.uniform(0, 0.1))
     tenth = x // 10
     if tenth in aggregate:
@@ -48,14 +52,14 @@ def test_add_context_key():
 
 def test_map_operation():
     pipeline = Pipeline()
-    pipeline.map('double', double)
-    assert pipeline.operations == [('map', 'double', double)]
+    pipeline.map('double', slow_double)
+    assert pipeline.operations == [('map', 'double', slow_double)]
 
 
 def test_reduce_operation():
     pipeline = Pipeline()
-    pipeline.reduce('test_reduce', only_one_for_tenths, set())
-    assert pipeline.operations == [('reduce', 'test_reduce', only_one_for_tenths)]
+    pipeline.reduce('test_reduce', slow_only_one_for_tenths, set())
+    assert pipeline.operations == [('reduce', 'test_reduce', slow_only_one_for_tenths)]
     assert 'test_reduce' in pipeline.context.data
     assert pipeline.context.data['test_reduce'] == set()
 
@@ -63,7 +67,7 @@ def test_reduce_operation():
 @pytest.fixture
 def basic_pipeline():
     pipeline = Pipeline()
-    pipeline.reduce('only_one_for_tenths', only_one_for_tenths, set()).map('tenth', tenth)
+    pipeline.reduce('only_one_for_tenths', slow_only_one_for_tenths, set()).map('tenth', slow_tenth)
     return pipeline
 
 
@@ -231,7 +235,7 @@ def test_incorrect_parameter_count_reduce():
 def test_incompatible_parameters_reduce():
     pipeline = Pipeline()
 
-    def reduce_fn(item: int, aggregate: set) -> tuple:
+    def reduce_fn(item: int, aggregate: set):
         aggregate.add(item)
         return item, lambda agg: agg
 
@@ -240,7 +244,7 @@ def test_incompatible_parameters_reduce():
 
     with pytest.raises(ValueError):
         # Here the initializer's type doesn't match the reduce_fn's aggregate arg type
-        pipeline.reduce('ok_reduce_step', reduce_fn, initializer=[])
+        pipeline.reduce('not_ok_reduce_step', reduce_fn, initializer=[])
 
 
 #
@@ -253,14 +257,20 @@ def test_map_function_parameter_type_order_in_ops():
     def correct_map_fn(item: int) -> int:
         return item * 2
 
-    def incorrect_map_fn(item: str) -> int:
-        return len(item)
+    def correct_map_fn_diff_types(item: int) -> str:
+        return f'item_{item}'
+
+    def incorrect_map_fn(item: int) -> int:
+        return item // 2
 
     pipeline.map('correct_map_fn', correct_map_fn)
+    pipeline.map('correct_map_fn_diff_types', correct_map_fn_diff_types)
 
     with pytest.raises(ValueError):
-        # We CAN know this before running the fn, because correct_map_fn returns int (from typehint),
-        # while incorrect_map_fn receives str, so they're incompatible
+        # We CAN know that this is wrong before running the fn, because:
+        # - correct_map_fn_diff_types returns an str (typehint),
+        # - incorrect_map_fn wants to receive an int (typehint),
+        # so they're incompatible.
         pipeline.map('incorrect_map_fn', incorrect_map_fn)
 
 
@@ -268,15 +278,13 @@ def test_reduce_function_parameter_type_order_in_ops():
     pipeline = Pipeline()
 
     def correct_reduce_fn(item: int, aggregate: set):
-        aggregate.add(item)
         return item, lambda agg: agg
 
     def correct_map_fn(item: int) -> int:
         return item * 2
 
-    def incorrect_reduce_fn(item: str, aggregate: list):
-        aggregate.append(item)
-        return len(item), lambda agg: agg.append(item)
+    def incorrect_reduce_fn(item: str, aggregate: set):
+        return item, lambda agg: agg
 
     pipeline.reduce('correct_reduce_fn', correct_reduce_fn, set())
     pipeline.map('correct_map_fn', correct_map_fn)

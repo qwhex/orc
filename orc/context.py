@@ -1,15 +1,19 @@
 from contextlib import contextmanager
-from multiprocessing import Manager
+from multiprocessing import Manager, Lock
+from multiprocessing.managers import SyncManager, DictProxy
+from queue import Queue
+from typing import Any, Generator, Tuple, Callable, TypeVar, Generic, Dict
 
-from typing import Any, Generator, Tuple, Callable
+Item = TypeVar('Item')
+State = Tuple[Item, Callable[[Item], Item]]
 
 
-class Context:
+class Context(Generic[Item]):
     def __init__(self):
-        self.manager = Manager()
-        self.locks = {}
-        self.data = self.manager.dict({})
-        self.output_queue = self.manager.Queue()
+        self.manager: SyncManager = Manager()
+        self.locks: Dict[str, Lock] = {}
+        self.data: DictProxy[str, Any] = self.manager.dict({})
+        self.output_queue: Queue[Item] = self.manager.Queue()
 
     def add_context_key(self, context_key: str, initializer: Any) -> None:
         if context_key in self.data:
@@ -19,7 +23,7 @@ class Context:
         self.locks[context_key] = self.manager.Lock()
 
     @contextmanager
-    def get_state(self, context_key: str) -> Generator[Tuple[Any, Callable[[Callable[[Any], Any]], Any]], None, None]:
+    def get_state(self, context_key: str) -> Generator[State, None, None]:
         with self.locks[context_key]:
             aggregate = self.data[context_key]
 
@@ -30,5 +34,5 @@ class Context:
 
             yield aggregate, set_val
 
-    def yield_result(self, value: Any) -> None:
+    def yield_result(self, value: Item) -> None:
         self.output_queue.put(value)

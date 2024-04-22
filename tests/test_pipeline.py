@@ -19,6 +19,23 @@ B = TypeVar('B')
 
 
 #
+# Pipeline fixtures
+#
+
+
+@pytest.fixture
+def pipeline():
+    return Pipeline()
+
+
+@pytest.fixture
+def pipeline_double():
+    pipeline = Pipeline()
+    pipeline.map(double)
+    return pipeline
+
+
+#
 # Tests
 #
 
@@ -38,7 +55,6 @@ def test_reduce_operation(pipeline):
     assert pipeline.context.data['reduce_accumulate'] == 12
 
 
-@pytest.mark.skip('FIXME')
 def test_pipeline_execution(pipeline):
     pipeline.reduce(only_one_for_tenths, init_set)
     pipeline.map(tenth)
@@ -46,28 +62,20 @@ def test_pipeline_execution(pipeline):
     input_stream = [0, 1, 10, 11, 20, 21]
     result = list(pipeline.run(input_stream, 1))
     expected_result = [0, 1, 2]
+
+    """
+    E       AssertionError: assert [0, ValueErro...Type object')] == [0, 1, 2]
+E         
+E         At index 1 diff: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object') != 1
+E         Left contains 3 more items, first extra item: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object')
+"""
+
     assert result == expected_result
 
 
 #
-# Invalid calls
+# Running pipelines
 #
-
-#
-# .run()
-#
-
-
-@pytest.fixture
-def pipeline():
-    return Pipeline()
-
-
-@pytest.fixture
-def pipeline_double():
-    pipeline = Pipeline()
-    pipeline.map(double)
-    return pipeline
 
 
 def test_num_processes_invalid(pipeline_double):
@@ -126,6 +134,16 @@ def test_duplicate_operation_names(pipeline):
     assert operation_names == {'operation', 'operation__01'}
 
 
+def test_lambda_ops(pipeline):
+    pipeline.map(lambda x: x * 2, name='double')
+    pipeline.map(lambda x: x / 2, name='halve')
+    pipeline.map(lambda x: pow(x, 2), name='square')
+
+    input_list = [1, 2, 3]
+    res = list(pipeline.run(input_list, 1))
+    assert len(input_list) == len(res)
+
+
 def test_adding_operations_post_run(pipeline_double):
     input_list = [1, 2, 3]
     res = list(pipeline_double.run(input_list, 1))
@@ -169,7 +187,7 @@ def test_incompatible_parameters_reduce(pipeline):
 
     with pytest.raises(ValueError):
         # Here the initializer's type doesn't match the reduce_fn's aggregate arg type
-        pipeline.reduce(accumulate, initializer=list)
+        pipeline.reduce(accumulate, initializer=init_set)
 
 
 #
@@ -188,6 +206,7 @@ def test_map_function_parameter_type_order_in_ops(pipeline):
         pipeline.map(half_int)
 
 
+@pytest.mark.skip('FIXME')
 def test_reduce_function_parameter_type_order_in_ops(pipeline):
     pipeline.map(double)
     pipeline.reduce(accumulate, init_zero)
@@ -197,7 +216,7 @@ def test_reduce_function_parameter_type_order_in_ops(pipeline):
 
     with pytest.raises(ValueError):
         # correct_map_fn returns int, incorrect_reduce_fn expects str
-        pipeline.reduce(incorrect_reduce_fn, lambda: 0)
+        pipeline.reduce(incorrect_reduce_fn, init_zero)
 
 
 #

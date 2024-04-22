@@ -5,6 +5,11 @@ from typing import Any, Optional
 from orc.pipeline import ReducerReturn
 
 
+def sleep_x(x: int) -> None:
+    sleep_time = min(0.1, x / 1000.0)
+    time.sleep(sleep_time)
+
+
 def init_zero() -> int:
     return 0
 
@@ -14,22 +19,21 @@ def init_set() -> set:
 
 
 def slow_double(x: int) -> int:
-    time.sleep(random.uniform(0, 0.1))
+    sleep_x(x)
     return x * 2
 
 
 def slow_tenth(x: int) -> int:
-    time.sleep(random.uniform(0, 0.1))
-
+    sleep_x(x)
     return x // 10
 
 
 def only_one_for_tenths(x: int, agg: set) -> ReducerReturn[set]:
-    time.sleep(random.uniform(0, 0.1))
+    sleep_x(x)
 
     tenth = x // 10
     if tenth in agg:
-        return None
+        return None, None
 
     def acc(prev: set) -> set:
         return prev.union({tenth})

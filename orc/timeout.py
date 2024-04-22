@@ -1,9 +1,7 @@
 import time
 from functools import wraps
-from typing import Callable
 
-from multiprocessing import Process
-from typing import Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable
+from typing import Callable
 
 
 def timeout(max_timeout: float):

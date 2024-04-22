@@ -1,19 +1,16 @@
 [run]
 branch = True
-source = orc/orc
 parallel = True
-concurrency = multiprocessing
+source = orc
+data_file = .coverage_data/.coverage
+concurrency =
+    multiprocessing
+    thread
 
 [report]
 exclude_lines =
-    # Don't complain about missing debug-only code:
     def __repr__
     if self.debug:
-
-    # Don't complain if tests don't hit defensive assertion code:
     raise AssertionError
     raise NotImplementedError
-
-    # Don't complain if non-runnable code isn't run:
-    if 0:
     if __name__ == .__main__.:

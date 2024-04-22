@@ -1,6 +1,11 @@
+# pyenv
 .python-version
+# coverage
+.coverage_data
 .coverage
+.coverage.*
 htmlcov
+# etc
 __pycache__
 .idea
 _*

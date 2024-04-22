@@ -6,7 +6,8 @@ from typing import Any, Optional, TypeVar, Callable
 
 import pytest
 
-from orc.pipeline import Pipeline, ReducerReturn
+from orc import Pipeline
+from orc.pipeline import ReducerReturn
 
 
 def init_zero() -> int:

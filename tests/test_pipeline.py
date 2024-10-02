@@ -65,10 +65,10 @@ def test_pipeline_execution(pipeline):
 
     """
     E       AssertionError: assert [0, ValueErro...Type object')] == [0, 1, 2]
-E         
-E         At index 1 diff: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object') != 1
-E         Left contains 3 more items, first extra item: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object')
-"""
+    E         
+    E         At index 1 diff: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object') != 1
+    E         Left contains 3 more items, first extra item: ValueError('[reduce] reduce_only_one_for_tenths - cannot unpack non-iterable NoneType object')
+    """
 
     assert result == expected_result
 

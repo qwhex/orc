@@ -2,7 +2,7 @@ import inspect
 import logging
 from inspect import _empty
 from multiprocessing import Process
-from typing import (Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable, Union, get_type_hints, _GenericAlias,
+from typing import (Any, Tuple, Callable, TypeVar, Optional, Generic, Iterable, get_type_hints, _GenericAlias,
                     _UnionGenericAlias)
 
 from orc.context import Context
@@ -24,7 +24,10 @@ ReducerReturn = Tuple[Optional[Any], Optional[Callable[[Agg], Agg]]]
 ReducerFunction = Callable[[Any, Agg], ReducerReturn[Agg]]
 
 
+# TODO: rename to Orc
 class Pipeline(Generic[Item]):
+    """multiprocessing data pipeline"""
+
     def __init__(self):
         self.operations = []
         self.context = Context()
@@ -111,9 +114,9 @@ class Pipeline(Generic[Item]):
 
         self.context.yield_result(result)
 
-    def _find_name(self, op_type, func: Union[MapFunction, ReducerFunction], name: Optional[str]) -> str:
-        if op_type not in ['map', 'reduce']:
-            raise AssertionError(f"op_type for {name} isn't map or reduce: {op_type}")
+    def _find_name(self, op_type: str, func: MapFunction | ReducerFunction, name: Optional[str]) -> str:
+        if op_type not in {'map', 'reduce'}:
+            raise AssertionError(f"`op_type` for {name} isn't map or reduce: {op_type}")
 
         if not name:
             name = f"{op_type}_{func.__name__}"
@@ -126,11 +129,11 @@ class Pipeline(Generic[Item]):
 
         return name
 
-    def _validate_unique_name(self, name):
+    def _validate_unique_name(self, name: str):
         if any(name == op_name for _, op_name, _ in self.operations):
             raise AssertionError(f"Operation name '{name}' must be unique")
 
-    def _validate_signature(self, func, expected_params_count):
+    def _validate_signature(self, func, expected_param_count: int):
         """
         Validates that the function has the correct number of parameters, and if `prev_func` is provided,
         checks that the output type of `prev_func` matches the input type of `func`.
@@ -142,9 +145,10 @@ class Pipeline(Generic[Item]):
         sig = inspect.signature(func)
         func_parameters = list(sig.parameters.values())
 
-        if len(func_parameters) != expected_params_count:
+        if len(func_parameters) != expected_param_count:
             raise ValueError(
-                    f"Param count: {func.__name__} expects {expected_params_count} parameters, got {len(func_parameters)}")
+                    f"Param count: {func.__name__} expects {expected_param_count} parameters, got {len(func_parameters)}"
+            )
 
         # Check io order
         if self.operations:
@@ -194,7 +198,7 @@ def _validate_agg_type(func: ReducerFunction[Agg], initializer: Callable[[], Agg
         raise ValueError(
                 f"Initializer return type mismatch: "
                 f"{func.__name__}() agg type: {func_agg_type}, "
-                f"{initializer.__name__}() : {init_return_type}")
+                f"{initializer.__name__}() ret type: {init_return_type}")
 
 
 def _get_aggregate_type(func: ReducerFunction) -> type:

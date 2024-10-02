@@ -5,6 +5,8 @@
 .coverage
 .coverage.*
 htmlcov
+# tests
+.hypothesis
 # etc
 __pycache__
 .idea

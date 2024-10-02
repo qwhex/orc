@@ -1,0 +1,51 @@
+Metadata-Version: 2.1
+Name: orc
+Version: 0.1
+Summary: Multiprocessing data pipeline orchestrator
+Home-page: https://github.com/qwhex/orc
+Author: Mice Pápai
+Author-email: hello@micepapai.com
+License: All Rights Reserved
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: License :: Other/Proprietary License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: toolz
+
+# orc
+
+multiprocessing data pipeline orchestrator
+
+> Experimental! Work in progress.
+
+This package helps you to orchestrate compute-heavy data transformations using multiprocessing, offloading the work to separate Python processes.
+
+## Usage
+
+```python
+pipeline = (Pipeline()
+            .map(lambda x: x * 2)
+            .reduce(accumulate, lambda: 0)
+            .map(lambda x: x + 1))
+
+# create an infinite stream of numbers: 0, 1, 2...
+stream = itertools.count()
+
+# process results, 12 at a time
+for item in pipeline.run(input_stream=stream, num_processes=16):
+    print(item)
+```
+
+## Authors
+
+```
+All Rights Reserved
+Copyright (c) 2024 Mice Pápai
+```

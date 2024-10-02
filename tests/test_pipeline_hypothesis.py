@@ -3,52 +3,60 @@ import itertools
 import pytest
 from hypothesis import strategies as st, given
 
-from orc.pipeline import Pipeline
-from tests.test_pipeline import (slow_double, slow_tenth,
-                                 only_one_for_tenths)
+from orc import Pipeline
+from orc.timeout import timeout
+from tests.helpers import (tenth, double, accumulate, identity, half_int, init_zero)
 
-# Correctly assign functions to operation types
-map_functions = [slow_double, slow_tenth]
-reduce_functions = [only_one_for_tenths]
+# Sane limits
+MAX_RESULTS_TO_TAKE = 100
+TIMEOUT_SECONDS = 1
 
-# Define a combined list of operations with their designated types
+# Operations
+# For simplicity, only int-based maps and reducers
+map_functions = [double, tenth, half_int, identity]
+reduce_functions = [accumulate]
 combined_operations = [('map', fn) for fn in map_functions] + [('reduce', fn) for fn in reduce_functions]
-
-# Operations strategy
 operation_strategy = st.lists(
         st.sampled_from(combined_operations),
         min_size=1,
-        max_size=7
-).map(lambda ops: [(i, op[0], op[1]) for i, op in enumerate(ops)])  # Adding unique suffix using index
-
-# Input stream strategies
-input_stream_strategy = st.one_of(
-        st.just(itertools.count()),  # Infinite generator
-        st.lists(st.integers(), min_size=1, max_size=1000)  # Finite list with random integers
+        max_size=3
 )
 
-num_processes_strategy = st.integers(min_value=1, max_value=24)
-num_results_to_take_strategy = st.integers(min_value=1, max_value=1000)
+# Input stram
+input_stream_strategy = st.one_of(
+        st.just(itertools.count()),
+        # st.just(list(range(100))),
+        # st.lists(st.integers(), min_size=1, max_size=10)
+)
+
+num_processes_strategy = st.one_of(
+        st.just(0),
+        st.just(1),
+        st.just(2),
+        st.just(4),
+)
 
 
-@given(input_stream=input_stream_strategy, num_processes=num_processes_strategy,
-       num_results_to_take=num_results_to_take_strategy, operations=operation_strategy)
-@pytest.mark.skip('foo')
-def test_pipeline_operations(input_stream, num_processes, num_results_to_take, operations):
+@pytest.mark.no_coverage
+@given(operations=operation_strategy,
+       input_stream=input_stream_strategy,
+       num_processes=num_processes_strategy,
+       )
+def test_pipeline_operations(input_stream, num_processes, operations):
     pipeline = Pipeline()
-    for idx, op_type, op_func in operations:
-        unique_name = f"{op_type}_{op_func.__name__}_{idx}"
+
+    for op_type, op_func in operations:
         if op_type == 'map':
-            pipeline.map(name=unique_name, func=op_func)
+            pipeline.map(op_func)
         elif op_type == 'reduce':
-            pipeline.reduce(name=unique_name, func=op_func, initializer=set())
+            pipeline.reduce(func=op_func, initializer=init_zero)
 
-    # Collect results
-    results = list(
-            itertools.islice(pipeline.run(input_stream=input_stream, num_processes=num_processes), num_results_to_take))
-    # Ensure no exceptions in results
+    res_gen = pipeline.run(input_stream=input_stream, num_processes=num_processes)
+
+    results = []
+    with timeout(TIMEOUT_SECONDS) as check_timeout:
+        for item in itertools.islice(res_gen, MAX_RESULTS_TO_TAKE):
+            results.append(item)
+            check_timeout()
+
     assert all(not isinstance(result, Exception) for result in results)
-
-
-# Example usage
-# test_pipeline_operations()
